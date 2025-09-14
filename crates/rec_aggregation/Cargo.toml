@@ -29,3 +29,6 @@ sumcheck.workspace = true
 vm.workspace = true
 compiler.workspace = true
 zk_vm.workspace = true
+
+[dev-dependencies]
+criterion = "0.5"

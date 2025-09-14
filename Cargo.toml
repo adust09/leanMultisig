@@ -98,3 +98,6 @@ utils.workspace = true
 p3-util.workspace = true
 pcs.workspace = true
 p3-air.workspace = true
+
+[dev-dependencies]
+criterion = "0.5"
