@@ -101,3 +101,7 @@ p3-air.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
+
+[[bench]]
+name = "poseidon2"
+harness = false

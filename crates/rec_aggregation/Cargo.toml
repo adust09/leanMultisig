@@ -32,3 +32,11 @@ zk_vm.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
+
+[[bench]]
+name = "xmss"
+harness = false
+
+[[bench]]
+name = "recursion"
+harness = false
