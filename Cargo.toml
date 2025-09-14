@@ -100,7 +100,7 @@ pcs.workspace = true
 p3-air.workspace = true
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.7"
 
 [[bench]]
 name = "poseidon2"
