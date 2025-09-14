@@ -235,8 +235,10 @@ pub fn prove_poseidon2(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use whir_p3::whir::config::{FoldingFactor, SecurityAssumption};
 
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

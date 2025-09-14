@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 use whir_p3::whir::config::{FoldingFactor, SecurityAssumption};
 
 // Import the example proving function from the binary crate's source.
@@ -78,4 +79,3 @@ fn bench_poseidon2_heavy(c: &mut Criterion) {
 
 criterion_group!(benches, bench_poseidon2_light, bench_poseidon2_heavy);
 criterion_main!(benches);
-
