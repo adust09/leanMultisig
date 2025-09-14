@@ -1,23 +1,19 @@
-use std::{
-    env,
-    time::{Duration, Instant},
-};
+use std::hint::black_box;
+use std::time::{Duration, Instant};
 
-use compiler::*;
+use compiler::compile_program;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use p3_field::PrimeCharacteristicRing;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
-
 use vm::*;
 use xmss::{PhonyXmssSecretKey, V, XmssSignature};
 use zk_vm::{
     build_batch_pcs, prove_execution::prove_execution, verify_execution::verify_execution,
 };
 
-#[test]
-fn test_xmss_aggregate() {
-    // Public input:  message_hash | all_public_keys | bitield
-    // Private input: signatures = (randomness | chain_tips | merkle_path)
+fn bench_xmss(n: usize, log_lifetime: usize) -> Duration {
+    // Program identical to library’s version; placeholders filled below.
     let mut program_str = r#"
 
     const V = 68;
@@ -68,7 +64,7 @@ fn test_xmss_aggregate() {
         }
         zero = 0;
         for i in 0..186 unroll {
-            zero = flipped_bits[i] * bits[i]; // TODO remove the use of auxiliary var (currently it generates 2 instructions instead of 1)
+            zero = flipped_bits[i] * bits[i];
         }
         encoding = malloc(12 * 6);
         for i in 0..6 unroll {
@@ -126,38 +122,33 @@ fn test_xmss_aggregate() {
                     poseidon16(pointer_to_zero_vector, chain_tips + 2 * i, public_key + 4 * i);
                 }
                 3 => {
-                    assert_eq_vec_deref(chain_tips_ptr + ((2 * i) * 8), public_key_ptr + ((4 * i + 1) * 8));
+                    assert_eq(encoding[2 * i + 1], 0);
+                    public_key_ptr[8 * (4 * i + 0)] = chain_tips_ptr[8 * (2 * i + 0)];
+                    public_key_ptr[8 * (4 * i + 1)] = chain_tips_ptr[8 * (2 * i + 1)];
                 }
             }
         }
 
+        compressed_0 = malloc_vec(V / 2);
+        compressed_1 = malloc_vec(V / 2);
         for i in 0..V / 2 unroll {
-            match encoding[2 * i + 1] {
-                0 => {
-                    chain_hash_1 = malloc_vec(2);
-                    chain_hash_2 = malloc_vec(2);
-                    poseidon16(chain_tips + 2 * i + 1, pointer_to_zero_vector, chain_hash_1);
-                    poseidon16(chain_hash_1, pointer_to_zero_vector, chain_hash_2);
-                    poseidon16(chain_hash_2, pointer_to_zero_vector, public_key + 4 * i + 2);
-                }
-                1 => {
-                    chain_hash_2 = malloc_vec(2);
-                    poseidon16(chain_tips +  2 * i + 1, pointer_to_zero_vector, chain_hash_2);
-                    poseidon16(chain_hash_2, pointer_to_zero_vector, public_key + (4 * i) + 2);
-                }
-                2 => {
-                    poseidon16(chain_tips + 2 * i + 1, pointer_to_zero_vector, public_key + 4 * i + 2);
-                }
-                3 => {
-                    assert_eq_vec_deref(chain_tips_ptr + ((2 * i + 1) * 8), public_key_ptr + ((4 * i + 2) * 8));
-                }
+            if encoding[2 * i + 1] == 0 {
+                compressed_0_ptr = compressed_0 * 8;
+                compressed_0_ptr[8 * i] = public_key_ptr[8 * (4 * i + 0) + 0];
+                compressed_0_ptr[8 * i + 1] = public_key_ptr[8 * (4 * i + 0) + 1];
+                compressed_0_ptr[8 * i + 2] = public_key_ptr[8 * (4 * i + 0) + 2];
+                compressed_0_ptr[8 * i + 3] = public_key_ptr[8 * (4 * i + 0) + 3];
+            } else {
+                compressed_1_ptr = compressed_1 * 8;
+                compressed_1_ptr[8 * i] = public_key_ptr[8 * (4 * i + 0) + 0];
+                compressed_1_ptr[8 * i + 1] = public_key_ptr[8 * (4 * i + 0) + 1];
+                compressed_1_ptr[8 * i + 2] = public_key_ptr[8 * (4 * i + 0) + 2];
+                compressed_1_ptr[8 * i + 3] = public_key_ptr[8 * (4 * i + 0) + 3];
             }
         }
-
 
         public_key_hashed = malloc_vec(V / 2);
         poseidon24(public_key + 1, pointer_to_zero_vector, public_key_hashed);
-
 
         for i in 1..V / 2 unroll {
             poseidon24(public_key + (4 * i + 1), public_key_hashed + (i - 1), public_key_hashed + i);
@@ -198,25 +189,20 @@ fn test_xmss_aggregate() {
         dot_product(x + 3, pointer_to_one_vector * 8, y + 3, 1);
         return;
     }
-   "#.to_string();
+    "#.to_string();
 
-    const LOG_LIFETIME: usize = 32;
-    const INV_BITFIELD_DENSITY: usize = 1; // (1 / INV_BITFIELD_DENSITY) of the bits are 1 in the bitfield
-
-    let n_public_keys: usize = env::var("NUM_XMSS_AGGREGATED")
-        .unwrap_or("100".to_string())
-        .parse()
-        .unwrap();
-
-    let xmss_signature_size_padded = (V + 1 + LOG_LIFETIME) + LOG_LIFETIME.div_ceil(8);
+    let n_public_keys: usize = n;
+    let log_lifetime_val = log_lifetime;
+    let xmss_signature_size_padded = (V + 1 + log_lifetime_val) + log_lifetime_val.div_ceil(8);
     program_str = program_str
-        .replace("LOG_LIFETIME_PLACE_HOLDER", &LOG_LIFETIME.to_string())
+        .replace("LOG_LIFETIME_PLACE_HOLDER", &log_lifetime_val.to_string())
         .replace("N_PUBLIC_KEYS_PLACE_HOLDER", &n_public_keys.to_string())
         .replace(
             "XMSS_SIG_SIZE_PLACE_HOLDER",
             &xmss_signature_size_padded.to_string(),
         );
 
+    const INV_BITFIELD_DENSITY: usize = 1; // select all
     let bitfield = (0..n_public_keys)
         .map(|i| i % INV_BITFIELD_DENSITY == 0)
         .collect::<Vec<_>>();
@@ -224,22 +210,60 @@ fn test_xmss_aggregate() {
     let mut rng = StdRng::seed_from_u64(0);
     let message_hash: [F; 8] = rng.random();
 
-    let (all_public_keys, all_signatures): (Vec<_>, Vec<_>) = (0..n_public_keys)
+    // Collect the Merkle roots (Digests) of XMSS public keys and signatures
+    let (all_public_keys, all_signatures): (Vec<[F; 8]>, Vec<XmssSignature>) = (0..n_public_keys)
         .into_par_iter()
-        .map(|i| {
+        .map(|i| -> ([F; 8], Option<XmssSignature>) {
             let mut rng = StdRng::seed_from_u64(i as u64);
             if bitfield[i] {
-                let signature_index = rng.random_range(0..1 << LOG_LIFETIME);
-                let xmss_secret_key =
-                    PhonyXmssSecretKey::<LOG_LIFETIME>::random(&mut rng, signature_index);
-                let signature = xmss_secret_key.sign(&message_hash, &mut rng);
-                (xmss_secret_key.public_key.0, Some(signature))
+                let signature_index = rng.random_range(0..1 << log_lifetime_val);
+                let (pk, sig) = match log_lifetime_val {
+                    16 => {
+                        let sk = PhonyXmssSecretKey::<16>::random(&mut rng, signature_index);
+                        (sk.public_key.0, sk.sign(&message_hash, &mut rng))
+                    }
+                    20 => {
+                        let sk = PhonyXmssSecretKey::<20>::random(&mut rng, signature_index);
+                        (sk.public_key.0, sk.sign(&message_hash, &mut rng))
+                    }
+                    24 => {
+                        let sk = PhonyXmssSecretKey::<24>::random(&mut rng, signature_index);
+                        (sk.public_key.0, sk.sign(&message_hash, &mut rng))
+                    }
+                    32 => {
+                        let sk = PhonyXmssSecretKey::<32>::random(&mut rng, signature_index);
+                        (sk.public_key.0, sk.sign(&message_hash, &mut rng))
+                    }
+                    _ => {
+                        let sk = PhonyXmssSecretKey::<32>::random(&mut rng, signature_index);
+                        (sk.public_key.0, sk.sign(&message_hash, &mut rng))
+                    }
+                };
+                (pk, Some(sig))
             } else {
-                (rng.random(), None) // random pub key
+                // Generate a random placeholder digest-sized public key (Merkle root).
+                let pk: [F; 8] = std::array::from_fn(|_| rng.random());
+                (pk, None)
             }
         })
-        .unzip();
-    let all_signatures: Vec<XmssSignature> = all_signatures.into_iter().flatten().collect();
+        .fold(
+            || (Vec::new(), Vec::new()),
+            |(mut pks, mut sigs), (pk, sig_opt)| {
+                pks.push(pk);
+                if let Some(sig) = sig_opt {
+                    sigs.push(sig);
+                }
+                (pks, sigs)
+            },
+        )
+        .reduce(
+            || (Vec::new(), Vec::new()),
+            |(mut pks_a, mut sigs_a), (mut pks_b, mut sigs_b)| {
+                pks_a.append(&mut pks_b);
+                sigs_a.append(&mut sigs_b);
+                (pks_a, sigs_a)
+            },
+        );
 
     let mut public_input = message_hash.to_vec();
     public_input.extend(all_public_keys.into_iter().flatten());
@@ -253,7 +277,7 @@ fn test_xmss_aggregate() {
     public_input.splice(1..1, F::zero_vec(7));
 
     let mut private_input = vec![];
-    for signature in all_signatures {
+    for signature in all_signatures.into_iter() {
         private_input.extend(signature.wots_signature.randomness.to_vec());
         private_input.extend(
             signature
@@ -274,31 +298,57 @@ fn test_xmss_aggregate() {
                 .iter()
                 .map(|(is_left, _)| F::new(*is_left as u32)),
         );
-        private_input.extend(F::zero_vec(LOG_LIFETIME.next_multiple_of(8) - LOG_LIFETIME));
+        private_input.extend(F::zero_vec(
+            log_lifetime_val.next_multiple_of(8) - log_lifetime_val,
+        ));
     }
-    if env::var("PROVE_XMSS_AGGREGATED").unwrap_or("true".to_string()) == "true" {
-        utils::init_tracing();
-        let (bytecode, function_locations) = compile_program(&program_str);
-        let batch_pcs = build_batch_pcs();
-        let time = Instant::now();
-        let proof_data = prove_execution(
-            &bytecode,
-            &program_str,
-            &function_locations,
-            &public_input,
-            &private_input,
-            &batch_pcs,
-            false,
-        );
-        let proving_time = time.elapsed();
-        verify_execution(&bytecode, &public_input, proof_data, &batch_pcs).unwrap();
-        println!(
-            "XMSS aggregation (n_signatures = {}, lifetime = 2^{})",
-            n_public_keys / INV_BITFIELD_DENSITY,
-            LOG_LIFETIME
-        );
-        println!("Proving time: {proving_time:?}");
-    } else {
-        compile_and_run(&program_str, &public_input, &private_input, false);
-    }
+
+    let (bytecode, function_locations) = compile_program(&program_str);
+    let batch_pcs = build_batch_pcs();
+    let time = Instant::now();
+    let proof_data = prove_execution(
+        &bytecode,
+        &program_str,
+        &function_locations,
+        &public_input,
+        &private_input,
+        &batch_pcs,
+        false,
+    );
+    let proving_time = time.elapsed();
+    verify_execution(&bytecode, &public_input, proof_data, &batch_pcs).expect("verify_execution");
+    proving_time
 }
+
+fn xmss_light(c: &mut Criterion) {
+    let mut g = c.benchmark_group("xmss_light");
+    g.sample_size(10)
+        .measurement_time(Duration::from_secs(30))
+        .warm_up_time(Duration::from_secs(10));
+
+    let n: usize = 100;
+    let log_lifetime: usize = 16;
+    g.throughput(Throughput::Elements(n as u64));
+    g.bench_with_input(BenchmarkId::new("xmss", "light"), &(), |b, _| {
+        b.iter(|| black_box(bench_xmss(n, log_lifetime)))
+    });
+    g.finish();
+}
+
+fn xmss_heavy(c: &mut Criterion) {
+    let mut g = c.benchmark_group("xmss_heavy");
+    g.sample_size(10)
+        .measurement_time(Duration::from_secs(60))
+        .warm_up_time(Duration::from_secs(10));
+
+    let n: usize = 500;
+    let log_lifetime: usize = 32;
+    g.throughput(Throughput::Elements(n as u64));
+    g.bench_with_input(BenchmarkId::new("xmss", "heavy"), &(), |b, _| {
+        b.iter(|| black_box(bench_xmss(n, log_lifetime)))
+    });
+    g.finish();
+}
+
+criterion_group!(benches, xmss_light, xmss_heavy);
+criterion_main!(benches);
