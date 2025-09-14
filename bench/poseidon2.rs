@@ -78,3 +78,4 @@ fn bench_poseidon2_heavy(c: &mut Criterion) {
 
 criterion_group!(benches, bench_poseidon2_light, bench_poseidon2_heavy);
 criterion_main!(benches);
+

@@ -105,3 +105,4 @@ criterion = "0.7"
 [[bench]]
 name = "poseidon2"
 harness = false
+path = "bench/poseidon2.rs"
