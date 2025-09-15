@@ -501,6 +501,26 @@ fn parse_function_call(
     }
 
     match function_name.as_str() {
+        "assert_eq" => {
+            assert!(
+                return_data.is_empty() && args.len() == 2,
+                "Invalid assert_eq call"
+            );
+            Ok(Line::Assert(Boolean::Equal {
+                left: args[0].clone(),
+                right: args[1].clone(),
+            }))
+        }
+        "assert_not_eq" | "assert_ne" => {
+            assert!(
+                return_data.is_empty() && args.len() == 2,
+                "Invalid assert_not_eq call"
+            );
+            Ok(Line::Assert(Boolean::Different {
+                left: args[0].clone(),
+                right: args[1].clone(),
+            }))
+        }
         "malloc" => {
             assert!(
                 args.len() == 1 && return_data.len() == 1,

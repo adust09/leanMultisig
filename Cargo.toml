@@ -111,14 +111,14 @@ rayon.workspace = true
 [[bench]]
 name = "poseidon2"
 harness = false
-path = "bench/poseidon2.rs"
+path = "benchs/poseidon2.rs"
 
-[[bench]]
-name = "xmss"
-harness = false
-path = "bench/xmss.rs"
+# [[bench]]
+# name = "xmss"
+# harness = false
+# path = "benchs/xmss.rs"
 
 [[bench]]
 name = "recursion"
 harness = false
-path = "bench/recursion.rs"
+path = "benchs/recursion.rs"
